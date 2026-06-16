@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -41,6 +41,7 @@ namespace Tempora
         /// <param name="args">Details about the launch request and process.</param>
         protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
         {
+            MainViewModelInstance = new ViewModels.MainViewModel();
             m_window = new MainWindow();
             MainWindowInstance = m_window;
             m_window.Activate();
@@ -48,5 +49,6 @@ namespace Tempora
 
         private Window? m_window;
         public static Window? MainWindowInstance { get; private set; }
+        public static ViewModels.MainViewModel? MainViewModelInstance { get; private set; }
     }
 }
