@@ -82,6 +82,11 @@
                                        ValueChanged="NumberOfBreaks_ValueChanged"
                                        HorizontalAlignment="Stretch"/>
                         </controls:SettingsCard>
+                        <controls:SettingsCard Header="Flow Mode"
+                                   Description="Cycle focus and break sessions indefinitely, ignoring the break count above.">
+                            <ToggleSwitch x:Name="flowModeToggle"
+                                          Toggled="FlowModeToggle_Toggled"/>
+                        </controls:SettingsCard>
                     </controls:SettingsExpander.Items>
                 </controls:SettingsExpander>
 
@@ -118,8 +123,7 @@
                     <controls:SettingsExpander.Items>
                         <controls:SettingsCard Header="Related links">
                             <StackPanel>
-                                <HyperlinkButton Content="GitHub Repository" NavigateUri="https://github.com/xprotonium"/>
-                                <HyperlinkButton Content="Release Notes" NavigateUri="https://github.com/xprotonium"/>
+                                <HyperlinkButton Content="GitHub Repository" NavigateUri="https://github.com/0funcc/Tempora"/>
                             </StackPanel>
                         </controls:SettingsCard>
                     </controls:SettingsExpander.Items>

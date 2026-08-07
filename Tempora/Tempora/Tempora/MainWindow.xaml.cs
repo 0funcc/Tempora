@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI;
 using Microsoft.UI.Composition.SystemBackdrops;
@@ -18,40 +19,77 @@ using Windows.Foundation;
 using Windows.Foundation.Collections;
 using Windows.Graphics;
 using Windows.Security.Cryptography.Core;
-using Windows.Storage;
 using Windows.UI;
 using Microsoft.Windows.AppNotifications;
 using Microsoft.Windows.AppNotifications.Builder;
 using Windows.Foundation.Metadata;
+using Tempora.Models;
+using Tempora.Services;
+using WinRT.Interop;
 
 namespace Tempora
 {
     public sealed partial class MainWindow : Window
     {
+        // Win32 interop: keeps the window always-on-top and swallows the
+        // double-click-to-maximize gesture on the extended title bar's drag
+        // region, without affecting the ability to drag the window.
+        private const int GWLP_WNDPROC = -4;
+        private const uint WM_NCLBUTTONDBLCLK = 0x00A3;
+        private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOMOVE = 0x0002;
+
+        private delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, WndProcDelegate newProc);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+
+        private IntPtr _hwnd;
+        private IntPtr _originalWndProc;
+        private WndProcDelegate? _wndProc;
+
         private SettingsWindow? _settingsWindow;
-        private int _focusDuration;
+        private readonly SettingsService _settingsService = new();
+        private readonly TimerSettings _settings = new();
         private bool _hasSessionStarted = false;
         private bool _sessionCompleted = false;
+
+        public TimerSettings Settings => _settings;
+
         public int FocusDuration
         {
-            get => _focusDuration;
+            get => _settings.FocusDuration;
             set
             {
-                _focusDuration = value;
+                _settings.FocusDuration = value;
                 // e.g. format as minutes:seconds
                 DispatcherQueue.TryEnqueue(() =>
                 {
-                    timer.Text = $"{_focusDuration:D2}:00";
+                    timer.Text = $"{value:D2}:00";
                 });
             }
         }
         public int BreakDuration
         {
-            get; set;
+            get => _settings.BreakDuration;
+            set => _settings.BreakDuration = value;
         }
         public int NumberOfBreaks
         {
-            get; set;
+            get => _settings.NumberOfBreaks;
+            set => _settings.NumberOfBreaks = value;
+        }
+        public bool FlowMode
+        {
+            get => _settings.FlowMode;
+            set => _settings.FlowMode = value;
         }
 
         public MainWindow()
@@ -59,6 +97,16 @@ namespace Tempora
             this.InitializeComponent();
 
             this.ExtendsContentIntoTitleBar = true;
+
+            _hwnd = WindowNative.GetWindowHandle(this);
+
+            // Keep the window pinned above other windows, like a utility/tool window
+            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+
+            // Swallow double-click-to-maximize on the drag region while leaving
+            // single-click-drag (a different message) untouched
+            _wndProc = WndProc;
+            _originalWndProc = SetWindowLongPtr(_hwnd, GWLP_WNDPROC, _wndProc);
 
             // Retreive the current app window
             AppWindow appWindow = this.AppWindow;
@@ -78,29 +126,29 @@ namespace Tempora
                 presenter.IsMaximizable = false;
             }
 
-            var values = ApplicationData.Current.LocalSettings.Values;
-            if (values.TryGetValue("focusTime", out var f) && f is double fd)
-                FocusDuration = (int)fd;
-            if (values.TryGetValue("breakDuration", out var b) && b is double bd)
-                BreakDuration = (int)bd;
-            if (values.TryGetValue("breakCount", out var c) && c is double cc)
-                NumberOfBreaks = (int)cc;
+            var loaded = _settingsService.Load();
+            FocusDuration = loaded.FocusDuration;
+            BreakDuration = loaded.BreakDuration;
+            NumberOfBreaks = loaded.NumberOfBreaks;
+            FlowMode = loaded.FlowMode;
 
-            // Load theme settings
-            if (values.TryGetValue("theme", out var themeRaw) && themeRaw is int savedTheme)
+            // Apply theme, but only if a preference was actually saved
+            if (loaded.Theme is AppTheme savedTheme)
             {
+                _settings.Theme = savedTheme;
                 if (Content is FrameworkElement root)
                 {
                     root.RequestedTheme = (ElementTheme)savedTheme;
                 }
             }
 
-            // Load backdrop settings
-            if (values.TryGetValue("backdrop", out var backdropRaw) && backdropRaw is string savedBackdrop)
+            // Apply backdrop, but only if a preference was actually saved
+            if (loaded.Backdrop is AppBackdrop savedBackdrop)
             {
+                _settings.Backdrop = savedBackdrop;
                 if (ApiInformation.IsPropertyPresent("Microsoft.UI.Xaml.Window", "SystemBackdrop"))
                 {
-                    var kind = savedBackdrop == "MicaAlt" ? MicaKind.BaseAlt : MicaKind.Base;
+                    var kind = savedBackdrop == AppBackdrop.MicaAlt ? MicaKind.BaseAlt : MicaKind.Base;
                     SystemBackdrop = new MicaBackdrop() { Kind = kind };
                 }
             }
@@ -110,6 +158,16 @@ namespace Tempora
             _timer.Interval = TimeSpan.FromSeconds(1);
             _timer.Tick += Timer_Elapsed;
             ((FrameworkElement)Content).Loaded += (_, _) => ResetSession();
+        }
+
+        private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+        {
+            if (msg == WM_NCLBUTTONDBLCLK)
+            {
+                return IntPtr.Zero;
+            }
+
+            return CallWindowProc(_originalWndProc, hWnd, msg, wParam, lParam);
         }
 
         // TIMER LOGIC
@@ -159,14 +217,16 @@ namespace Tempora
             {
                 _isInFocus = false;
                 _timeLeft = TimeSpan.FromMinutes(BreakDuration);
-                _breaksLeft--;
+
+                if (!FlowMode)
+                    _breaksLeft--;
 
                 if (_hasSessionStarted)
                     ShowToast("Break Time", "Take a short break!");
 
                 UpdateBreakIndicators();
             }
-            else if (_breaksLeft > 0)
+            else if (FlowMode || _breaksLeft > 0)
             {
                 _isInFocus = true;
                 _timeLeft = TimeSpan.FromMinutes(FocusDuration);
@@ -193,6 +253,18 @@ namespace Tempora
 
                 breakIndicatorPanel.Children.Clear();
 
+                if (FlowMode)
+                {
+                    breakIndicatorPanel.Children.Add(new TextBlock
+                    {
+                        Text = "∞",
+                        FontSize = 22,
+                        Foreground = accentBrush,
+                        VerticalAlignment = VerticalAlignment.Center
+                    });
+                    return;
+                }
+
                 for (int i = 0; i < NumberOfBreaks; i++)
                 {
                     var ellipse = new Ellipse
@@ -201,7 +273,8 @@ namespace Tempora
                         Height = 10,
                         Stroke = accentBrush,
                         StrokeThickness = 1,
-                        Margin = new Thickness(2)
+                        Margin = new Thickness(2),
+                        VerticalAlignment = VerticalAlignment.Center
                     };
 
                     if (i < (NumberOfBreaks - _breaksLeft))
