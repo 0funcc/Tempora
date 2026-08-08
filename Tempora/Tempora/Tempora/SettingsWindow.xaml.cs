@@ -47,12 +47,6 @@ namespace Tempora
             // Extend the content to the title bar
             this.ExtendsContentIntoTitleBar = true;
 
-            // Apply Mica Backdrop
-            if (ApiInformation.IsPropertyPresent("Microsoft.UI.Xaml.Window", "SystemBackdrop"))
-            {
-                SystemBackdrop = new MicaBackdrop() { Kind = MicaKind.Base };
-            }
-
             _root = (FrameworkElement)Content;
 
             // On open, apply whatever was saved last time
@@ -134,10 +128,10 @@ namespace Tempora
                 _root.RequestedTheme = (ElementTheme)newTheme;
             }
 
-            // Also apply it to your MainWindow
-            if (App.MainWindowInstance?.Content is FrameworkElement mainRoot)
+            // Also apply it to MainWindow (and PillWindow, if it's open)
+            if (App.MainWindowInstance is MainWindow main)
             {
-                mainRoot.RequestedTheme = (ElementTheme)newTheme;
+                main.ApplyTheme((ElementTheme)newTheme);
             }
 
             // Persist for next launch
@@ -165,13 +159,10 @@ namespace Tempora
                 SystemBackdrop = new MicaBackdrop() { Kind = kind };
             }
 
-            // 3) also apply to MainWindow if it's open
-            if (App.MainWindowInstance is Window main && main.SystemBackdrop is MicaBackdrop)
+            // 3) also apply to MainWindow (and PillWindow, if it's open)
+            if (App.MainWindowInstance is MainWindow main)
             {
-                if (ApiInformation.IsPropertyPresent("Microsoft.UI.Xaml.Window", "SystemBackdrop"))
-                {
-                    main.SystemBackdrop = new MicaBackdrop() { Kind = kind };
-                }
+                main.ApplyBackdrop(kind);
             }
 
             // 4) persist choice

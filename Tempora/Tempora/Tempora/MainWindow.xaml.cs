@@ -55,6 +55,8 @@ namespace Tempora
         private IntPtr _originalWndProc;
         private WndProcDelegate? _wndProc;
 
+        private PillWindow? _pillWindow;
+
         private SettingsWindow? _settingsWindow;
         private readonly SettingsService _settingsService = new();
         private readonly TimerSettings _settings = new();
@@ -310,7 +312,15 @@ namespace Tempora
             });
         }
 
-        private void StartButton_Click(object sender, RoutedEventArgs e)
+        private void StartButton_Click(object sender, RoutedEventArgs e) => StartOrResume();
+
+        private void PauseButton_Click(object sender, RoutedEventArgs e) => Pause();
+
+        private void StopButton_Click(object sender, RoutedEventArgs e) => Stop();
+
+        // Exposed publicly so PillWindow's controls can drive the same session
+        // state instead of duplicating the timer logic in a second window.
+        public void StartOrResume()
         {
             if (!_hasSessionStarted)
             {
@@ -327,12 +337,12 @@ namespace Tempora
             }
         }
 
-        private void PauseButton_Click(object sender, RoutedEventArgs e)
+        public void Pause()
         {
             _timer.Stop();
         }
 
-        private void StopButton_Click(object sender, RoutedEventArgs e)
+        public void Stop()
         {
             _timer.Stop();
             ResetSession();
@@ -345,22 +355,26 @@ namespace Tempora
             // Because Timer_Elapsed runs on a worker thread, marshal back to UI:
             this.DispatcherQueue.TryEnqueue(() =>
             {
-                // Ensure the timer does not reset after 60 minutes
-                int totalMinutes = (int)ts.TotalMinutes;
-                int seconds = ts.Seconds;
-
-                // Format the timer as hours:minutes:seconds if it exceeds 60 minutes
-                if (totalMinutes >= 60)
-                {
-                    int hours = totalMinutes / 60;
-                    int minutes = totalMinutes % 60;
-                    timer.Text = $"{hours:D2}:{minutes:D2}:{seconds:D2}";
-                }
-                else
-                {
-                    timer.Text = ts.ToString(@"mm\:ss");
-                }
+                string text = FormatTime(ts);
+                timer.Text = text;
+                _pillWindow?.SetDisplayText(text);
             });
+        }
+
+        private static string FormatTime(TimeSpan ts)
+        {
+            // Ensure the timer does not reset after 60 minutes
+            int totalMinutes = (int)ts.TotalMinutes;
+            int seconds = ts.Seconds;
+
+            if (totalMinutes >= 60)
+            {
+                int hours = totalMinutes / 60;
+                int minutes = totalMinutes % 60;
+                return $"{hours:D2}:{minutes:D2}:{seconds:D2}";
+            }
+
+            return ts.ToString(@"mm\:ss");
         }
 
         // SETTINGS WINDOW
@@ -387,6 +401,50 @@ namespace Tempora
         private void Button_PointerExited(object sender, PointerRoutedEventArgs e)
         {
             AnimatedIcon.SetState(SettingsAnimatedIcon, "Normal");
+        }
+
+        // PILL MODE
+
+        private void PillModeButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_pillWindow == null)
+            {
+                _pillWindow = new PillWindow(this);
+            }
+
+            _pillWindow.MoveTo(AppWindow.Position);
+            _pillWindow.ShowPill();
+            AppWindow.Hide();
+        }
+
+        // Called by PillWindow when the user exits compact mode
+        public void RestoreFromPill(PointInt32 position)
+        {
+            AppWindow.Move(position);
+            AppWindow.Show();
+            this.Activate();
+        }
+
+        // SettingsWindow calls these instead of poking MainWindow's Content/SystemBackdrop
+        // directly, so the change also reaches PillWindow when it exists.
+        public void ApplyTheme(ElementTheme theme)
+        {
+            if (Content is FrameworkElement root)
+            {
+                root.RequestedTheme = theme;
+            }
+
+            _pillWindow?.ApplyTheme(theme);
+        }
+
+        public void ApplyBackdrop(MicaKind kind)
+        {
+            if (ApiInformation.IsPropertyPresent("Microsoft.UI.Xaml.Window", "SystemBackdrop"))
+            {
+                SystemBackdrop = new MicaBackdrop { Kind = kind };
+            }
+
+            _pillWindow?.ApplyBackdrop(kind);
         }
     }
 }
