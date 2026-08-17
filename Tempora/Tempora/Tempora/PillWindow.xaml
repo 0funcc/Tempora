@@ -15,7 +15,7 @@
                        Text="00:00"
                        FontSize="32"
                        HorizontalAlignment="Center"/>
-            <Border x:Name="PillExpandContainer" Height="0" HorizontalAlignment="Center">
+            <Border x:Name="PillExpandContainer" Height="0" Opacity="0" HorizontalAlignment="Center">
                 <StackPanel Orientation="Vertical" Spacing="8">
                     <StackPanel x:Name="TimerControlsPanel"
                                 Orientation="Horizontal"

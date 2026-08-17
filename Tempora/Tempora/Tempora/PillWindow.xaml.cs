@@ -7,6 +7,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Windows.Foundation;
 using Windows.Graphics;
 using WinRT.Interop;
@@ -111,8 +112,18 @@ namespace Tempora
         private bool _isExpanded;
         private bool _isPillVisible;
         private bool _pillContentLoaded;
-        private DispatcherTimer? _hoverAnimTimer;
         private DispatcherTimer? _hoverPollTimer;
+
+        // Resize animation state, driven by CompositionTarget.Rendering (once per
+        // actual composed frame) rather than a fixed-interval DispatcherTimer, so
+        // it naturally matches the display's real refresh rate instead of an
+        // arbitrary tick rate that can drift once a real AppWindow.Resize call is
+        // squeezed into each tick.
+        private bool _isAnimatingHeight;
+        private DateTime _animStart;
+        private int _animStartHeight;
+        private int _animTargetHeight;
+        private Action? _animOnComplete;
 
         public PillWindow(MainWindow owner)
         {
@@ -254,7 +265,11 @@ namespace Tempora
             _isPillVisible = false;
 
             StopHoverPolling();
-            _hoverAnimTimer?.Stop();
+            if (_isAnimatingHeight)
+            {
+                CompositionTarget.Rendering -= OnAnimationRendering;
+                _isAnimatingHeight = false;
+            }
 
             _owner.RestoreFromPill(AppWindow.Position);
             AppWindow.Hide();
@@ -305,6 +320,7 @@ namespace Tempora
 
             _isExpanded = true;
             AnimateHeight(PillExpandedHeight, UpdateDragRegion);
+            FadeContent(1);
         }
 
         private void CollapsePill()
@@ -314,11 +330,36 @@ namespace Tempora
 
             _isExpanded = false;
             AnimateHeight(PillHeight, UpdateDragRegion);
+            FadeContent(0);
+        }
+
+        // A plain opacity fade doesn't need the frame-driven approach the resize
+        // animation uses - Opacity is a normal composited XAML property, so a
+        // Storyboard animates it smoothly on its own.
+        private void FadeContent(double to)
+        {
+            var animation = new DoubleAnimation
+            {
+                To = to,
+                Duration = new Duration(TimeSpan.FromMilliseconds(HoverAnimationMs)),
+                EasingFunction = new CubicEase { EasingMode = to > 0 ? EasingMode.EaseOut : EasingMode.EaseIn }
+            };
+
+            Storyboard.SetTarget(animation, PillExpandContainer);
+            Storyboard.SetTargetProperty(animation, "Opacity");
+
+            var storyboard = new Storyboard();
+            storyboard.Children.Add(animation);
+            storyboard.Begin();
         }
 
         private void AnimateHeight(int targetHeight, Action? onComplete = null)
         {
-            _hoverAnimTimer?.Stop();
+            if (_isAnimatingHeight)
+            {
+                CompositionTarget.Rendering -= OnAnimationRendering;
+                _isAnimatingHeight = false;
+            }
 
             int startHeight = AppWindow.Size.Height;
             if (startHeight == targetHeight)
@@ -328,26 +369,33 @@ namespace Tempora
                 return;
             }
 
-            var start = DateTime.UtcNow;
-            _hoverAnimTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(10) };
-            _hoverAnimTimer.Tick += (s, e) =>
-            {
-                double t = (DateTime.UtcNow - start).TotalMilliseconds / HoverAnimationMs;
-                if (t >= 1.0)
-                {
-                    _hoverAnimTimer?.Stop();
-                    AppWindow.Resize(new SizeInt32(PillWidth, targetHeight));
-                    SyncContentHeight(targetHeight);
-                    onComplete?.Invoke();
-                    return;
-                }
+            _animStart = DateTime.UtcNow;
+            _animStartHeight = startHeight;
+            _animTargetHeight = targetHeight;
+            _animOnComplete = onComplete;
 
-                double eased = 1 - Math.Pow(1 - t, 3);
-                int currentHeight = startHeight + (int)((targetHeight - startHeight) * eased);
-                AppWindow.Resize(new SizeInt32(PillWidth, currentHeight));
-                SyncContentHeight(currentHeight);
-            };
-            _hoverAnimTimer.Start();
+            _isAnimatingHeight = true;
+            CompositionTarget.Rendering += OnAnimationRendering;
+        }
+
+        private void OnAnimationRendering(object? sender, object e)
+        {
+            double t = (DateTime.UtcNow - _animStart).TotalMilliseconds / HoverAnimationMs;
+            if (t >= 1.0)
+            {
+                CompositionTarget.Rendering -= OnAnimationRendering;
+                _isAnimatingHeight = false;
+
+                AppWindow.Resize(new SizeInt32(PillWidth, _animTargetHeight));
+                SyncContentHeight(_animTargetHeight);
+                _animOnComplete?.Invoke();
+                return;
+            }
+
+            double eased = 1 - Math.Pow(1 - t, 3);
+            int currentHeight = _animStartHeight + (int)((_animTargetHeight - _animStartHeight) * eased);
+            AppWindow.Resize(new SizeInt32(PillWidth, currentHeight));
+            SyncContentHeight(currentHeight);
         }
 
         // Keeps the revealed content's height exactly in step with how much extra

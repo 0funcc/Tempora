@@ -23,6 +23,7 @@ using Windows.UI;
 using Microsoft.Windows.AppNotifications;
 using Microsoft.Windows.AppNotifications.Builder;
 using Windows.Foundation.Metadata;
+using Windows.Services.Store;
 using Tempora.Models;
 using Tempora.Services;
 using WinRT.Interop;
@@ -159,7 +160,36 @@ namespace Tempora
             _timer = new DispatcherTimer();
             _timer.Interval = TimeSpan.FromSeconds(1);
             _timer.Tick += Timer_Elapsed;
-            ((FrameworkElement)Content).Loaded += (_, _) => ResetSession();
+            ((FrameworkElement)Content).Loaded += (_, _) =>
+            {
+                ResetSession();
+                WarmUpAnimationPipeline();
+            };
+        }
+
+        // WinUI pays a one-time JIT/DirectComposition warm-up cost the first time
+        // a theme transition (EntranceThemeTransition) ever plays, which is what
+        // made the break-indicator dots look choppy on their first real
+        // appearance. Playing the same transition once here, invisibly, right
+        // after launch pays that cost before the user can press Start.
+        private void WarmUpAnimationPipeline()
+        {
+            var warmupDot = new Ellipse
+            {
+                Width = 10,
+                Height = 10,
+                Opacity = 0
+            };
+
+            breakIndicatorPanel.Children.Add(warmupDot);
+
+            var warmupTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+            warmupTimer.Tick += (s, e) =>
+            {
+                warmupTimer.Stop();
+                breakIndicatorPanel.Children.Clear();
+            };
+            warmupTimer.Start();
         }
 
         private IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
@@ -238,6 +268,7 @@ namespace Tempora
             {
                 ShowToast("Session Complete", "You've finished all focus sessions.");
                 _sessionCompleted = true;
+                MaybeRequestReviewAsync();
                 return;
             }
 
@@ -340,6 +371,35 @@ namespace Tempora
         public void Pause()
         {
             _timer.Stop();
+
+            if (_hasSessionStarted)
+            {
+                MaybeRequestReviewAsync();
+            }
+        }
+
+        // Prompts for a Store rating/review at most once, ever, after the first
+        // pause or session completion - whichever happens first. Uses the native
+        // in-app dialog (RequestRateAndReviewAppAsync) rather than sending the
+        // user out to the Store app.
+        private async void MaybeRequestReviewAsync()
+        {
+            if (_settingsService.HasRequestedReview())
+                return;
+
+            _settingsService.MarkReviewRequested();
+
+            try
+            {
+                var storeContext = StoreContext.GetDefault();
+                InitializeWithWindow.Initialize(storeContext, _hwnd);
+                await storeContext.RequestRateAndReviewAppAsync();
+            }
+            catch
+            {
+                // Not installed from the Store (e.g. sideloaded during development) -
+                // the API isn't available in that case, so just skip silently.
+            }
         }
 
         public void Stop()

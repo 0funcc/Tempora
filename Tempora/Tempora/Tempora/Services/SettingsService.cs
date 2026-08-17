@@ -11,6 +11,7 @@ namespace Tempora.Services
         private const string ThemeKey = "theme";
         private const string BackdropKey = "backdrop";
         private const string FlowModeKey = "flowMode";
+        private const string HasRequestedReviewKey = "hasRequestedReview";
 
         public TimerSettings Load()
         {
@@ -56,5 +57,11 @@ namespace Tempora.Services
 
         public void SaveFlowMode(bool enabled) =>
             ApplicationData.Current.LocalSettings.Values[FlowModeKey] = enabled;
+
+        public bool HasRequestedReview() =>
+            ApplicationData.Current.LocalSettings.Values.TryGetValue(HasRequestedReviewKey, out var v) && v is bool b && b;
+
+        public void MarkReviewRequested() =>
+            ApplicationData.Current.LocalSettings.Values[HasRequestedReviewKey] = true;
     }
 }
